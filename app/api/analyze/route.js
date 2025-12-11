@@ -3,47 +3,58 @@ import { NextResponse } from "next/server";
 
 export async function POST(req) {
   try {
-    const { apiKey } = await req.json(); // 從前端傳入 API Key
+    const { apiKey, promptContext } = await req.json();
 
-    // 實際應用中，這裡可以使用 fetch 去抓取 Yahoo Finance 或 CNBC 的 RSS
-    // 這裡我們模擬一段抓取到的美國財經新聞原文
-    const rawNewsText = `
-      Markets are watching NVIDIA (NVDA) closely as AI demand surges.
-      Meanwhile, Apple (AAPL) announced new features for the iPhone.
-      Tesla (TSLA) stock dropped slightly due to production delays.
-      The technology sector remains the hottest area for investors.
-    `;
+    if (!apiKey) {
+      return NextResponse.json({ error: "API Key is missing" }, { status: 400 });
+    }
 
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
+    // 讓 Prompt 更明確，要求 JSON 格式
     const prompt = `
-      You are a financial analyst. Analyze the following news text.
-      Return a STRICT JSON object (no markdown) with this structure:
+      You are a financial analyst.
+      Target Keyword: "${promptContext || 'US Stock Market'}".
+      Analyze current market news based on this keyword.
+
+      Return a STRICT JSON object with this exact structure (no markdown code blocks, just raw JSON):
       {
-        "summary": "Brief summary in Traditional Chinese",
-        "hot_sector": "Name of the hottest sector mentioned",
+        "summary": "Brief summary in Traditional Chinese (within 50 words)",
+        "hot_sector": "Name of the hottest sector",
         "stocks": [
           { "symbol": "AAPL.US", "name": "Apple", "reason": "Why it's hot" },
           { "symbol": "NVDA.US", "name": "Nvidia", "reason": "Why it's hot" }
         ]
       }
-      Important: Convert all US stock tickers to the format "TICKER.US" (e.g., TSLA.US).
-
-      News Text: ${rawNewsText}
+      Important:
+      1. Convert all US stock tickers to "TICKER.US".
+      2. Do not include \`\`\`json or \`\`\` markers.
+      3. Create believable mock news based on real-world trends if you cannot browse live web.
     `;
 
     const result = await model.generateContent(prompt);
     const response = await result.response;
-    const text = response.text();
+    let text = response.text();
 
-    // 清理 Markdown 格式 (```json ... ```)
-    const jsonStr = text.replace(/```json|```/g, '').trim();
-    const data = JSON.parse(jsonStr);
+    // [更強的清理邏輯] 移除可能存在的 Markdown 標記
+    text = text.replace(/```json/g, '').replace(/```/g, '').trim();
 
-    return NextResponse.json(data);
+    try {
+      const data = JSON.parse(text);
+      return NextResponse.json(data);
+    } catch (parseError) {
+      console.error("JSON Parse Error:", text); // 在 Vercel Log 可以看到原始回應
+      return NextResponse.json({
+        error: "AI 回傳格式錯誤",
+        rawText: text
+      }, { status: 500 });
+    }
 
   } catch (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error("API Error:", error);
+    return NextResponse.json({
+      error: error.message || "Internal Server Error"
+    }, { status: 500 });
   }
 }

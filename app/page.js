@@ -16,24 +16,38 @@ export default function Home() {
   const analyzeMarket = async () => {
     if (!apiKey) return alert('請先輸入 Gemini API Key 以獲取新聞分析');
     setLoading(true);
+    setNewsAnalysis(null); // 清空舊資料，避免混淆
+
     try {
-      // 這裡我們會把 keyword 也傳給後端，讓 AI 針對關鍵字找新聞
       const res = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ apiKey, promptContext: keyword })
       });
+
       const data = await res.json();
+
+      // [新增] 檢查後端是否回傳錯誤
+      if (!res.ok || data.error) {
+        throw new Error(data.error || `Server Error: ${res.status}`);
+      }
+
+      // [新增] 檢查資料格式是否正確 (避免讀取 undefined 導致崩潰)
+      if (!data.hot_sector || !data.summary || !data.stocks) {
+        throw new Error('AI 回傳格式不如預期，請重試');
+      }
+
       setNewsAnalysis(data);
 
-      // 分析完成後，自動訂閱提到的股票
       if (data.stocks) {
         const codes = data.stocks.map(s => s.symbol);
         subscribeStocks(codes);
       }
+
     } catch (e) {
       console.error(e);
-      alert('分析失敗，請檢查 API Key 是否正確');
+      // 這裡會把具體錯誤秀給你看，方便除錯
+      alert(`分析失敗：${e.message}`);
     } finally {
       setLoading(false);
     }
