@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 import { NextResponse } from "next/server";
 
 export async function POST(req) {
@@ -9,17 +9,15 @@ export async function POST(req) {
       return NextResponse.json({ error: "API Key is missing" }, { status: 400 });
     }
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-
-    // [修正點] 將模型改為最穩定的 gemini-pro，避免 404 錯誤
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+    // [新版 SDK 初始化]
+    const ai = new GoogleGenAI({ apiKey: apiKey });
 
     const prompt = `
       You are a financial analyst.
       Target Keyword: "${promptContext || 'US Stock Market'}".
       Analyze current market news based on this keyword.
 
-      Return a STRICT JSON object with this exact structure (no markdown code blocks, just raw JSON):
+      Return a STRICT JSON object with this exact structure (no markdown, just raw JSON):
       {
         "summary": "Brief summary in Traditional Chinese (within 50 words)",
         "hot_sector": "Name of the hottest sector",
@@ -28,18 +26,29 @@ export async function POST(req) {
           { "symbol": "NVDA.US", "name": "Nvidia", "reason": "Why it's hot" }
         ]
       }
-      Important: 
+      Important:
       1. Convert all US stock tickers to "TICKER.US".
       2. Do not include \`\`\`json or \`\`\` markers.
-      3. Create believable mock news based on real-world trends if you cannot browse live web.
     `;
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    let text = response.text();
+    // [新版 SDK 呼叫方式]
+    // 直接透過 ai.models.generateContent 呼叫，不需要先 getModel
+    const response = await ai.models.generateContent({
+      model: 'gemini-1.5-flash',
+      contents: prompt,
+      // 新版 SDK 支援直接設定回應格式 (雖然目前還是建議手動 parse 以防萬一)
+      config: {
+        responseMimeType: 'application/json',
+      }
+    });
 
-    // 清理 Markdown
-    text = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    // [新版 SDK 取得文字的方式] 直接存取 .text
+    let text = response.text;
+
+    // 清理可能殘留的 Markdown 標記
+    if (text) {
+        text = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    }
 
     try {
       const data = JSON.parse(text);
@@ -53,7 +62,7 @@ export async function POST(req) {
     }
 
   } catch (error) {
-    console.error("API Error Detailed:", error); // 這裡會印出詳細錯誤到 Vercel Log
+    console.error("New SDK Error:", error);
     return NextResponse.json({
       error: error.message || "Internal Server Error"
     }, { status: 500 });
