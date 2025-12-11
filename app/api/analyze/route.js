@@ -9,8 +9,11 @@ export async function POST(req) {
       return NextResponse.json({ error: "API Key is missing" }, { status: 400 });
     }
 
-    // [新版 SDK 初始化]
-    const ai = new GoogleGenAI({ apiKey: apiKey });
+    // [修正] 初始化時指定使用 v1beta 版本，這對新模型支援度較好
+    const ai = new GoogleGenAI({
+      apiKey: apiKey,
+      apiVersion: 'v1beta'
+    });
 
     const prompt = `
       You are a financial analyst.
@@ -31,21 +34,18 @@ export async function POST(req) {
       2. Do not include \`\`\`json or \`\`\` markers.
     `;
 
-    // [新版 SDK 呼叫方式]
-    // 直接透過 ai.models.generateContent 呼叫，不需要先 getModel
+    // [修正] 呼叫 generateContent
     const response = await ai.models.generateContent({
       model: 'gemini-1.5-flash',
       contents: prompt,
-      // 新版 SDK 支援直接設定回應格式 (雖然目前還是建議手動 parse 以防萬一)
       config: {
         responseMimeType: 'application/json',
       }
     });
 
-    // [新版 SDK 取得文字的方式] 直接存取 .text
     let text = response.text;
 
-    // 清理可能殘留的 Markdown 標記
+    // 清理 Markdown
     if (text) {
         text = text.replace(/```json/g, '').replace(/```/g, '').trim();
     }
@@ -62,7 +62,15 @@ export async function POST(req) {
     }
 
   } catch (error) {
-    console.error("New SDK Error:", error);
+    console.error("SDK Error:", error);
+
+    // 如果錯誤包含 404，給予更明確的提示
+    if (error.message?.includes("404") || error.message?.includes("not found")) {
+        return NextResponse.json({
+          error: "API Key 權限不足或模型不存在。請務必在 Google AI Studio 建立『新專案』的金鑰。"
+        }, { status: 404 });
+    }
+
     return NextResponse.json({
       error: error.message || "Internal Server Error"
     }, { status: 500 });
