@@ -10,9 +10,10 @@ export async function POST(req) {
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-    // 讓 Prompt 更明確，要求 JSON 格式
+    // [修正點] 將模型改為最穩定的 gemini-pro，避免 404 錯誤
+    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+
     const prompt = `
       You are a financial analyst.
       Target Keyword: "${promptContext || 'US Stock Market'}".
@@ -27,7 +28,7 @@ export async function POST(req) {
           { "symbol": "NVDA.US", "name": "Nvidia", "reason": "Why it's hot" }
         ]
       }
-      Important:
+      Important: 
       1. Convert all US stock tickers to "TICKER.US".
       2. Do not include \`\`\`json or \`\`\` markers.
       3. Create believable mock news based on real-world trends if you cannot browse live web.
@@ -37,14 +38,14 @@ export async function POST(req) {
     const response = await result.response;
     let text = response.text();
 
-    // [更強的清理邏輯] 移除可能存在的 Markdown 標記
+    // 清理 Markdown
     text = text.replace(/```json/g, '').replace(/```/g, '').trim();
 
     try {
       const data = JSON.parse(text);
       return NextResponse.json(data);
     } catch (parseError) {
-      console.error("JSON Parse Error:", text); // 在 Vercel Log 可以看到原始回應
+      console.error("JSON Parse Error:", text);
       return NextResponse.json({
         error: "AI 回傳格式錯誤",
         rawText: text
@@ -52,7 +53,7 @@ export async function POST(req) {
     }
 
   } catch (error) {
-    console.error("API Error:", error);
+    console.error("API Error Detailed:", error); // 這裡會印出詳細錯誤到 Vercel Log
     return NextResponse.json({
       error: error.message || "Internal Server Error"
     }, { status: 500 });

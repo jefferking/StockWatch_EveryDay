@@ -16,7 +16,7 @@ export default function Home() {
   const analyzeMarket = async () => {
     if (!apiKey) return alert('請先輸入 Gemini API Key 以獲取新聞分析');
     setLoading(true);
-    setNewsAnalysis(null); // 清空舊資料，避免混淆
+    setNewsAnalysis(null); // 清空舊資料
 
     try {
       const res = await fetch('/api/analyze', {
@@ -27,14 +27,14 @@ export default function Home() {
 
       const data = await res.json();
 
-      // [新增] 檢查後端是否回傳錯誤
+      // [關鍵] 如果後端回傳錯誤 (例如 404 或 500)，這裡要攔截
       if (!res.ok || data.error) {
         throw new Error(data.error || `Server Error: ${res.status}`);
       }
 
-      // [新增] 檢查資料格式是否正確 (避免讀取 undefined 導致崩潰)
+      // 檢查資料完整性
       if (!data.hot_sector || !data.summary || !data.stocks) {
-        throw new Error('AI 回傳格式不如預期，請重試');
+        throw new Error('AI 回傳格式不正確，請重試');
       }
 
       setNewsAnalysis(data);
@@ -46,7 +46,7 @@ export default function Home() {
 
     } catch (e) {
       console.error(e);
-      // 這裡會把具體錯誤秀給你看，方便除錯
+      // 這裡會跳出錯誤視窗，而不會讓網頁白屏
       alert(`分析失敗：${e.message}`);
     } finally {
       setLoading(false);
