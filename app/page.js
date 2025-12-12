@@ -11,6 +11,17 @@ ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, T
 // 七巨頭代碼
 const MAGNIFICENT_SEVEN = ["AAPL.US", "MSFT.US", "GOOG.US", "AMZN.US", "NVDA.US", "META.US", "TSLA.US"];
 
+// 簡單的字串轉數字雜湊函式，確保同一關鍵字產生同一張圖
+const stringToSeed = (str) => {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash);
+};
+
 export default function Home() {
   const [apiKey, setApiKey] = useState('');
   const [keyword, setKeyword] = useState('美股市場');
@@ -182,7 +193,7 @@ export default function Home() {
                <div className="flex flex-col md:flex-row">
                  <div className="md:w-5/12 h-56 md:h-auto relative overflow-hidden bg-gray-100 group">
                     <img
-                      src={`https://picsum.photos/seed/${newsAnalysis.hot_sector}/800/600`}
+                      src={`https://picsum.photos/seed/${stringToSeed(newsAnalysis.hot_sector)}/400/250`}
                       alt="News" className="absolute inset-0 w-full h-full object-cover transform group-hover:scale-105 transition-transform duration-700"
                     />
                     <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-t from-black/60 to-transparent md:hidden"></div>
