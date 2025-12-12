@@ -1,235 +1,246 @@
 "use client";
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useSinoPacSocket } from '../hooks/useSinoPacSocket';
-import { Search, RotateCcw, TrendingUp, Zap, Wifi, WifiOff, Key } from 'lucide-react';
+import { Search, RotateCcw, TrendingUp, Zap, Wifi, WifiOff, Key, ArrowUp, ArrowDown } from 'lucide-react';
+import { Line } from 'react-chartjs-2';
+import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend } from 'chart.js';
+
+// 註冊 Chart.js 元件
+ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend);
+
+// 七巨頭代碼
+const MAGNIFICENT_SEVEN = ["AAPL.US", "MSFT.US", "GOOG.US", "AMZN.US", "NVDA.US", "META.US", "TSLA.US"];
 
 export default function Home() {
   const [apiKey, setApiKey] = useState('');
-  const [keyword, setKeyword] = useState('美股市場'); // 預設搜尋關鍵字
+  const [keyword, setKeyword] = useState('美股市場');
   const [newsAnalysis, setNewsAnalysis] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  // 取得 WebSocket 狀態與資料
-  const { isConnected, marketData, subscribeStocks } = useSinoPacSocket();
+  // 當 Auth 成功後，自動訂閱七巨頭
+  const onAuthSuccess = useCallback(() => {
+    console.log("自動訂閱七巨頭...");
+    // 這裡我們稍微延遲一下確保穩定
+    setTimeout(() => {
+        subscribeStocks(MAGNIFICENT_SEVEN);
+    }, 500);
+  }, []); // 依賴項為空，只定義一次
 
-  // 觸發 Gemini 分析
+  // 傳入回調函式
+  const { isConnected, marketData, subscribeStocks } = useSinoPacSocket(onAuthSuccess);
+
+  // 如果 marketData 有更新，重新 subscribe 確保沒漏掉 (可選)
+  // 這裡我們直接用 onAuthSuccess 處理了初始訂閱
+
   const analyzeMarket = async () => {
-    if (!apiKey) return alert('請先輸入 Gemini API Key 以獲取新聞分析');
+    if (!apiKey) return alert('請先輸入 Gemini API Key');
     setLoading(true);
-    setNewsAnalysis(null); // 清空舊資料
-
+    setNewsAnalysis(null);
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ apiKey, promptContext: keyword })
       });
-
       const data = await res.json();
-
-      // [關鍵] 如果後端回傳錯誤 (例如 404 或 500)，這裡要攔截
-      if (!res.ok || data.error) {
-        throw new Error(data.error || `Server Error: ${res.status}`);
-      }
-
-      // 檢查資料完整性
-      if (!data.hot_sector || !data.summary || !data.stocks) {
-        throw new Error('AI 回傳格式不正確，請重試');
-      }
-
+      if (!res.ok || data.error) throw new Error(data.error || 'API Error');
       setNewsAnalysis(data);
-
-      if (data.stocks) {
-        const codes = data.stocks.map(s => s.symbol);
-        subscribeStocks(codes);
-      }
-
+      if (data.stocks) subscribeStocks(data.stocks.map(s => s.symbol));
     } catch (e) {
-      console.error(e);
-      // 這裡會跳出錯誤視窗，而不會讓網頁白屏
       alert(`分析失敗：${e.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  // 輔助函式：取得漲跌顏色
   const getPriceColor = (val) => {
     const num = parseFloat(val);
-    if (num > 0) return 'text-red-600'; // 台股習慣紅漲
-    if (num < 0) return 'text-green-600'; // 綠跌
+    if (num > 0) return 'text-red-600';
+    if (num < 0) return 'text-green-600';
     return 'text-gray-600';
   };
 
-  return (
-    <div className="min-h-screen bg-white text-gray-800 font-sans">
+  // 繪製微型走勢圖 (Sparkline) 的設定
+  const getChartData = (symbol) => {
+    // 這裡模擬一些歷史數據，因為 WebSocket 只給即時價
+    // 實務上您應該要把每次收到的 price 存進一個 array
+    return {
+      labels: ['1', '2', '3', '4', '5', '6', '7'],
+      datasets: [{
+        data: [100, 102, 101, 104, 103, 105, parseFloat(marketData[symbol]?.price || 0) || 100],
+        borderColor: parseFloat(marketData[symbol]?.limitUpDown || 0) >= 0 ? '#dc2626' : '#16a34a',
+        borderWidth: 2,
+        pointRadius: 0,
+        tension: 0.4
+      }]
+    };
+  };
 
-      {/* 頂部導覽列 (模擬新聞網站 Header) */}
-      <div className="border-b border-gray-200">
-        <div className="max-w-6xl mx-auto px-4 py-4 flex justify-between items-center">
+  const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { display: false }, tooltip: { enabled: false } },
+    scales: { x: { display: false }, y: { display: false } }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 text-gray-800 font-sans">
+
+      {/* Header */}
+      <div className="bg-white border-b border-gray-200 sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-6 lg:px-8 py-4 flex justify-between items-center">
           <div className="flex items-center gap-4">
-            <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
-              美股新聞 <span className="text-blue-600 text-sm font-normal ml-2">AI 戰情室</span>
+            <h1 className="text-2xl font-bold tracking-tight text-gray-900">
+              美股戰情室 <span className="text-blue-600 text-sm font-normal">AI x Realtime</span>
             </h1>
-            {/* 狀態燈號 */}
-            <div className={`flex items-center gap-1 px-2 py-1 rounded text-xs ${isConnected ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+            <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${isConnected ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
               {isConnected ? <Wifi size={14}/> : <WifiOff size={14}/>}
-              <span>{isConnected ? '報價連線中' : '報價中斷'}</span>
+              <span>{isConnected ? 'LIVE' : 'OFFLINE'}</span>
             </div>
           </div>
-
-          {/* API Key 輸入區 (放在右上角比較不佔位) */}
           <div className="flex items-center gap-2">
             <div className="relative">
-              <Key className="absolute left-2 top-2 text-gray-400" size={14} />
-              <input
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="輸入 Gemini API Key..."
-                className="pl-8 pr-3 py-1.5 text-sm border border-gray-300 rounded focus:outline-none focus:border-blue-500 w-48 transition-all"
-              />
+               <Key className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
+               <input
+                 type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)}
+                 placeholder="Gemini API Key"
+                 className="pl-9 pr-4 py-2 text-sm border border-gray-300 rounded-full focus:ring-2 focus:ring-blue-500 w-48 transition-all shadow-sm"
+               />
             </div>
           </div>
         </div>
       </div>
 
-      {/* 導覽頁籤 */}
-      <div className="bg-gray-50 border-b border-gray-200">
-        <div className="max-w-6xl mx-auto px-4">
-          <ul className="flex space-x-8 text-sm font-medium text-gray-600">
-            <li className="py-3 border-b-2 border-blue-600 text-blue-600 cursor-pointer">重點新聞</li>
-            <li className="py-3 hover:text-gray-900 cursor-pointer">熱門焦點</li>
-            <li className="py-3 hover:text-gray-900 cursor-pointer">個股動態</li>
-            <li className="py-3 hover:text-gray-900 cursor-pointer">經濟數據</li>
-          </ul>
-        </div>
-      </div>
+      {/* Main Content: 增加左右 Margin (max-w-7xl + px-6/8) */}
+      <main className="max-w-7xl mx-auto px-6 lg:px-8 py-8 grid grid-cols-12 gap-8">
 
-      <div className="max-w-6xl mx-auto px-4 py-8 grid grid-cols-12 gap-8">
+        {/* 左側：新聞與 AI 分析 (佔 8 等份) */}
+        <div className="col-span-12 lg:col-span-8 space-y-6">
 
-        {/* 左側主要內容 (新聞列表) - 佔 8 等份 */}
-        <div className="col-span-12 lg:col-span-8">
-
-          {/* 篩選工具列 (模仿截圖中的篩選區) */}
-          <div className="bg-gray-50 p-4 rounded mb-6 flex flex-wrap gap-4 items-center border border-gray-100">
-            <span className="font-bold text-gray-700">篩選新聞</span>
-            <input
-              type="text"
-              value={keyword}
-              onChange={(e) => setKeyword(e.target.value)}
-              className="border border-gray-300 px-3 py-1.5 rounded text-sm w-48 focus:outline-none focus:border-blue-500"
-              placeholder="關鍵字 (例: 台積電)"
-            />
+          {/* 搜尋列 */}
+          <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 flex flex-wrap gap-4 items-center">
+            <h2 className="font-bold text-gray-700">市場掃描</h2>
+            <div className="flex-1 min-w-[200px]">
+               <input
+                 type="text" value={keyword} onChange={(e) => setKeyword(e.target.value)}
+                 className="w-full border border-gray-300 px-4 py-2 rounded-lg text-sm focus:outline-none focus:border-blue-500"
+                 placeholder="輸入關鍵字..."
+               />
+            </div>
             <button
-              onClick={analyzeMarket}
-              disabled={loading}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-1.5 rounded text-sm flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              onClick={analyzeMarket} disabled={loading}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-all shadow-md disabled:opacity-50"
             >
-              {loading ? <RotateCcw className="animate-spin" size={14}/> : <Search size={14}/>}
-              {loading ? 'AI 分析中...' : '搜尋'}
-            </button>
-            <button className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-5 py-1.5 rounded text-sm transition-colors">
-              重設
+              {loading ? <RotateCcw className="animate-spin" size={16}/> : <Search size={16}/>}
+              {loading ? '分析中...' : '開始分析'}
             </button>
           </div>
 
-          {/* 新聞列表呈現 */}
-          <div className="space-y-6">
-            {!newsAnalysis ? (
-              <div className="text-center py-20 text-gray-400 bg-gray-50 rounded-lg border border-dashed border-gray-200">
-                <TrendingUp className="mx-auto mb-2 opacity-20" size={48} />
-                <p>請輸入 API Key 並點擊搜尋，Gemini 將為您解析最新市場動態</p>
-              </div>
-            ) : (
-              // 這裡顯示 Gemini 分析出的結果，模擬成新聞列表
-              <div className="bg-white border-b border-gray-100 pb-6 flex gap-6 group">
-                {/* 假圖 (因為 API 只有文字，我們用 Unsplash 隨機圖模擬新聞圖) */}
-                <div className="w-1/3 overflow-hidden rounded bg-gray-100 hidden sm:block">
-                   {/* 使用關鍵字當作圖片種子 */}
-                   <img
-                     src={`https://picsum.photos/seed/${newsAnalysis.hot_sector}/400/250`}
-                     alt="News Thumbnail"
-                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                   />
-                </div>
-
-                <div className="flex-1">
-                  <h3 className="text-xl font-bold text-gray-800 mb-2 group-hover:text-blue-600 transition-colors cursor-pointer">
-                    {/* 這裡組合一個像新聞的標題 */}
-                    【市場焦點】{newsAnalysis.hot_sector} 領漲！AI 分析：{newsAnalysis.summary.substring(0, 20)}...
-                  </h3>
-
-                  <div className="flex items-center gap-3 text-xs text-gray-500 mb-3">
-                    <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded">鉅亨網新聞</span>
-                    <span>{new Date().toLocaleDateString()} {new Date().toLocaleTimeString()}</span>
-                    <span className="flex items-center gap-1 text-red-500"><Zap size={12}/> 利多</span>
-                  </div>
-
-                  <p className="text-gray-600 text-sm leading-relaxed mb-4">
-                    {newsAnalysis.summary}
-                  </p>
-
-                  {/* 關聯個股標籤 */}
-                  <div className="flex gap-2">
-                    {newsAnalysis.stocks.map(stock => (
-                      <span key={stock.symbol} className="px-2 py-1 bg-gray-100 text-gray-600 text-xs rounded hover:bg-gray-200 cursor-pointer">
-                        #{stock.name} ({stock.symbol})
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* 右側側邊欄 (即時報價) - 佔 4 等份 */}
-        <div className="col-span-12 lg:col-span-4 pl-0 lg:pl-4">
-          <div className="sticky top-6">
-            <h3 className="font-bold text-gray-800 text-lg mb-4 flex items-center gap-2 border-l-4 border-blue-600 pl-3">
-              即時報價
+          {/* 七巨頭速覽 (新增區塊) */}
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+            <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
+              <TrendingUp className="text-blue-600"/> 科技七巨頭 (Magnificent 7)
             </h3>
-
-            <div className="space-y-3">
-              {newsAnalysis?.stocks?.map((stock) => {
-                const liveData = marketData[stock.symbol] || {};
-                const price = liveData.price || liveData.closePrice || '---';
-                const change = liveData.limitUpDown || '0';
-
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {MAGNIFICENT_SEVEN.map(symbol => {
+                const data = marketData[symbol] || {};
+                const price = data.price || '-';
+                const change = data.limitUpDown || '0';
                 return (
-                  <div key={stock.symbol} className="bg-white p-4 rounded shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
-                    <div className="flex justify-between items-center mb-1">
-                      <span className="font-bold text-gray-900 text-lg">{stock.symbol}</span>
-                      <span className={`font-mono font-bold text-lg ${getPriceColor(change)}`}>
-                        {price}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center text-sm">
-                      <span className="text-gray-500">{stock.name}</span>
-                      <span className={`${getPriceColor(change)} bg-gray-50 px-2 py-0.5 rounded`}>
+                  <div key={symbol} className="p-3 bg-gray-50 rounded-lg border border-gray-100 hover:border-blue-300 transition-colors">
+                    <div className="text-xs text-gray-500 mb-1">{symbol.split('.')[0]}</div>
+                    <div className={`text-lg font-bold ${getPriceColor(change)}`}>{price}</div>
+                    <div className={`text-xs flex items-center ${getPriceColor(change)}`}>
+                        {parseFloat(change) > 0 ? <ArrowUp size={12}/> : <ArrowDown size={12}/>}
                         {change}%
-                      </span>
-                    </div>
-                    {/* Gemini 的簡短評語 */}
-                    <div className="mt-3 pt-3 border-t border-gray-100 text-xs text-gray-500">
-                      <span className="font-semibold text-blue-600">AI 觀點：</span>
-                      {stock.reason}
                     </div>
                   </div>
-                );
+                )
               })}
-
-              {!newsAnalysis && (
-                <div className="text-sm text-gray-400 text-center py-4 bg-gray-50 rounded">
-                  尚未有觀察清單
-                </div>
-              )}
             </div>
           </div>
+
+          {/* AI 分析結果 */}
+          {newsAnalysis ? (
+            <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow">
+               <div className="flex flex-col md:flex-row">
+                 <div className="md:w-1/3 h-48 md:h-auto relative overflow-hidden">
+                    <img
+                      src={`https://picsum.photos/seed/${newsAnalysis.hot_sector}/600/400`}
+                      alt="News" className="absolute inset-0 w-full h-full object-cover transform hover:scale-105 transition-transform duration-700"
+                    />
+                    <div className="absolute top-2 left-2 bg-blue-600 text-white text-xs font-bold px-2 py-1 rounded">AI 推薦</div>
+                 </div>
+                 <div className="p-6 md:w-2/3 flex flex-col justify-between">
+                    <div>
+                       <h3 className="text-xl font-bold text-gray-900 mb-2 leading-tight">
+                         {newsAnalysis.hot_sector} 成為市場焦點：{newsAnalysis.summary.substring(0, 30)}...
+                       </h3>
+                       <p className="text-gray-600 text-sm leading-relaxed mb-4">
+                         {newsAnalysis.summary}
+                       </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2 mt-4">
+                       {newsAnalysis.stocks.map(s => (
+                         <span key={s.symbol} className="px-2 py-1 bg-blue-50 text-blue-700 text-xs font-medium rounded border border-blue-100">
+                           #{s.name}
+                         </span>
+                       ))}
+                    </div>
+                 </div>
+               </div>
+            </div>
+          ) : (
+             <div className="text-center py-16 bg-white rounded-xl border border-dashed border-gray-300">
+                <p className="text-gray-400">輸入 API Key 並點擊分析，獲取即時市場洞察</p>
+             </div>
+          )}
+
         </div>
 
-      </div>
+        {/* 右側：詳細報價列表 (佔 4 等份) */}
+        <div className="col-span-12 lg:col-span-4 space-y-6">
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 sticky top-24">
+             <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2 border-l-4 border-blue-600 pl-3">
+               關注清單
+             </h3>
+             <div className="space-y-4">
+               {(newsAnalysis?.stocks || []).map(stock => {
+                  const data = marketData[stock.symbol] || {};
+                  return (
+                    <div key={stock.symbol} className="group p-4 rounded-lg bg-gray-50 border border-gray-100 hover:bg-white hover:shadow-md transition-all">
+                       <div className="flex justify-between items-start mb-2">
+                          <div>
+                             <div className="font-bold text-gray-900">{stock.symbol}</div>
+                             <div className="text-xs text-gray-500">{stock.name}</div>
+                          </div>
+                          <div className="text-right">
+                             <div className={`font-mono font-bold ${getPriceColor(data.limitUpDown)}`}>
+                                {data.price || '-'}
+                             </div>
+                             <div className={`text-xs ${getPriceColor(data.limitUpDown)}`}>
+                                {data.limitUpDown}%
+                             </div>
+                          </div>
+                       </div>
+                       {/* 迷你走勢圖 */}
+                       <div className="h-10 w-full mt-2">
+                          <Line data={getChartData(stock.symbol)} options={chartOptions} />
+                       </div>
+                       <div className="mt-3 pt-2 border-t border-gray-200 text-xs text-gray-500">
+                          <span className="text-blue-600 font-semibold">AI: </span>{stock.reason}
+                       </div>
+                    </div>
+                  );
+               })}
+               {!newsAnalysis && (
+                 <div className="text-sm text-gray-400 text-center py-10">暫無 AI 推薦個股</div>
+               )}
+             </div>
+          </div>
+        </div>
+
+      </main>
     </div>
   );
 }
