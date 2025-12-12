@@ -9,10 +9,12 @@ export async function POST(req) {
       return NextResponse.json({ error: "API Key is missing" }, { status: 400 });
     }
 
-    // [修正] 初始化時指定使用 v1beta 版本，這對新模型支援度較好
+    // [資深開發者 Note]:
+    // 這裡我們初始化 SDK 並強制指定使用 'v1beta' API 版本。
+    // 這對齊了您的 curl 請求: https://generativelanguage.googleapis.com/v1beta/...
     const ai = new GoogleGenAI({
       apiKey: apiKey,
-      apiVersion: 'v1beta'
+      apiVersion: 'v1beta' 
     });
 
     const prompt = `
@@ -20,7 +22,7 @@ export async function POST(req) {
       Target Keyword: "${promptContext || 'US Stock Market'}".
       Analyze current market news based on this keyword.
 
-      Return a STRICT JSON object with this exact structure (no markdown, just raw JSON):
+      Return a STRICT JSON object with this exact structure (no markdown code blocks, just raw JSON):
       {
         "summary": "Brief summary in Traditional Chinese (within 50 words)",
         "hot_sector": "Name of the hottest sector",
@@ -34,18 +36,20 @@ export async function POST(req) {
       2. Do not include \`\`\`json or \`\`\` markers.
     `;
 
-    // [修正] 呼叫 generateContent
+    // [資深開發者 Note]:
+    // 使用您 curl 測試成功的 'gemini-2.5-flash' 模型。
     const response = await ai.models.generateContent({
-      model: 'gemini-1.5-flash',
+      model: 'gemini-2.5-flash',
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
       }
     });
 
+    // 取得回應文字
     let text = response.text;
 
-    // 清理 Markdown
+    // 防呆處理：如果 AI 還是習慣性加了 Markdown，我們幫它清乾淨
     if (text) {
         text = text.replace(/```json/g, '').replace(/```/g, '').trim();
     }
@@ -56,21 +60,15 @@ export async function POST(req) {
     } catch (parseError) {
       console.error("JSON Parse Error:", text);
       return NextResponse.json({
-        error: "AI 回傳格式錯誤",
+        error: "AI 回傳格式錯誤，無法解析為 JSON",
         rawText: text
       }, { status: 500 });
     }
 
   } catch (error) {
-    console.error("SDK Error:", error);
+    console.error("Gemini API Error:", error);
 
-    // 如果錯誤包含 404，給予更明確的提示
-    if (error.message?.includes("404") || error.message?.includes("not found")) {
-        return NextResponse.json({
-          error: "API Key 權限不足或模型不存在。請務必在 Google AI Studio 建立『新專案』的金鑰。"
-        }, { status: 404 });
-    }
-
+    // 將 SDK 的錯誤訊息完整回傳，方便前端 Debug
     return NextResponse.json({
       error: error.message || "Internal Server Error"
     }, { status: 500 });
