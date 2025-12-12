@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import pako from 'pako'; // [新增] 引入解壓縮套件
 
 const WSS_URL = 'wss://mitakerainbowuat.mtkstock.com.tw:8633/';
 
 const getFormattedTime = () => {
   const now = new Date();
   const pad = (n) => n.toString().padStart(2, '0');
-  return `${now.getHours()}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`; // 簡化時間顯示
+  return `${now.getHours()}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
 };
 
-// 產生完整 YYYYMMDDHHMMSS 給封包用
 const getPacketTime = () => {
     const now = new Date();
     const pad = (n) => n.toString().padStart(2, '0');
@@ -21,17 +21,16 @@ export function useSinoPacSocket(onAuthSuccess) {
   const heartbeatIntervalRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
   const snRef = useRef(1);
+  const requestHistoryRef = useRef(new Map());
 
-  // [新增] 除錯日誌 State
   const [logs, setLogs] = useState([]);
   const [isConnected, setIsConnected] = useState(false);
   const [marketData, setMarketData] = useState({});
 
-  // [新增] 寫入日誌的輔助函式
   const addLog = useCallback((msg, type = 'info') => {
     const time = getFormattedTime();
-    setLogs(prev => [`[${time}] ${msg}`, ...prev].slice(0, 50)); // 只保留最近 50 筆
-    console.log(`[${time}] ${msg}`);
+    setLogs(prev => [`[${time}] ${msg}`, ...prev].slice(0, 50));
+    // console.log(`[${time}] ${msg}`); // 可註解掉以減少 console 雜訊
   }, []);
 
   const sendPacket = useCallback((api, data = {}, extraFields = {}) => {
@@ -42,6 +41,7 @@ export function useSinoPacSocket(onAuthSuccess) {
         data: { time: getPacketTime(), ...data }
       };
 
+      // Auth 特殊參數 (模擬 Android)
       if (api === 'auth') {
         delete payload.token;
         Object.assign(payload, {
@@ -50,6 +50,8 @@ export function useSinoPacSocket(onAuthSuccess) {
           uid: "863818039530051", platform_os: "25", device_mode: "vivo X7"
         });
       }
+
+      if (api !== 'hb') requestHistoryRef.current.set(currentSn, { api, data, extraFields });
 
       addLog(`發送 -> ${api} (SN:${currentSn})`, 'send');
       socketRef.current.send(JSON.stringify(payload));
@@ -66,6 +68,8 @@ export function useSinoPacSocket(onAuthSuccess) {
 
     try {
         socketRef.current = new WebSocket(WSS_URL);
+        // [關鍵] 設定接收格式為 ArrayBuffer 以便 pako 解壓縮
+        socketRef.current.binaryType = 'arraybuffer';
     } catch (e) {
         addLog(`WebSocket 建構失敗: ${e.message}`, 'error');
         return;
@@ -75,28 +79,53 @@ export function useSinoPacSocket(onAuthSuccess) {
       addLog('✅ WebSocket 連線成功 (Connected)', 'success');
       setIsConnected(true);
       snRef.current = 1;
+      requestHistoryRef.current.clear();
 
-      // 連線後馬上發送 Auth
       addLog('準備發送 Auth...', 'info');
       sendPacket('auth', { auth_key: "", US: "r", HK: "d" });
     };
 
     socketRef.current.onmessage = (event) => {
       try {
-        const response = JSON.parse(event.data);
+        let textData = '';
+
+        // [關鍵修正] 判斷是否為二進位資料並解壓縮
+        if (event.data instanceof ArrayBuffer) {
+            try {
+                // 使用 pako 解壓縮 Gzip
+                textData = pako.inflate(new Uint8Array(event.data), { to: 'string' });
+                // addLog(`解壓縮成功 (${event.data.byteLength} -> ${textData.length} bytes)`, 'info');
+            } catch (err) {
+                addLog(`解壓縮失敗: ${err.message}`, 'error');
+                return;
+            }
+        } else {
+            textData = event.data;
+        }
+
+        const response = JSON.parse(textData);
         const { api, sn, data } = response;
 
-        // 只記錄非心跳的 Log，避免洗版
+        // Log 顯示
         if (api !== 'hb') {
             addLog(`收到 <- ${api} (RC:${data?.rc})`, data?.rc === '000' ? 'success' : 'error');
         }
 
+        // 408 Retry
+        if (data?.rc === '408') {
+            addLog(`⚠️ 收到 408 Timeout, 1秒後重試...`, 'warning');
+            const original = requestHistoryRef.current.get(sn);
+            if (original) setTimeout(() => sendPacket(original.api, original.data, original.extraFields), 1000);
+            return;
+        }
+        if (data?.rc === '000' && sn) requestHistoryRef.current.delete(sn);
+
+        // 處理 Auth
         if (api === 'auth') {
              if (data?.rc === '000') {
                 tokenRef.current = data.token;
                 addLog(`🔑 Auth 成功! Token 取得`, 'success');
 
-                // 啟動心跳
                 if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
                 heartbeatIntervalRef.current = setInterval(() => sendPacket('hb'), 10000);
 
@@ -106,6 +135,7 @@ export function useSinoPacSocket(onAuthSuccess) {
              }
         }
 
+        // 處理報價
         if (api === 'quote' || api === 'sync') {
           const items = data.trendItems || [data];
           if (items && items.length > 0) {
@@ -127,8 +157,7 @@ export function useSinoPacSocket(onAuthSuccess) {
     socketRef.current.onclose = (event) => {
       setIsConnected(false);
       tokenRef.current = null;
-      // 顯示斷線原因代碼 (重要！)
-      addLog(`❌ 連線中斷 (Code: ${event.code}, Reason: ${event.reason || '無'})`, 'error');
+      addLog(`❌ 連線中斷 (Code: ${event.code})`, 'error');
 
       if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
 
@@ -138,9 +167,8 @@ export function useSinoPacSocket(onAuthSuccess) {
       }, 3000);
     };
 
-    socketRef.current.onerror = (err) => {
-      // 瀏覽器基於安全原因，onerror 通常不給詳細資訊，只能知道有錯
-      addLog('⚠️ WebSocket 發生錯誤 (請檢查瀏覽器 Console Network 標籤)', 'error');
+    socketRef.current.onerror = () => {
+      addLog('⚠️ WebSocket 發生錯誤', 'error');
     };
 
   }, [sendPacket, addLog, onAuthSuccess]);
@@ -158,10 +186,9 @@ export function useSinoPacSocket(onAuthSuccess) {
     if (tokenRef.current) {
       sendPacket('push', { qtype: "US", reset: "n", codes });
     } else {
-      addLog('訂閱失敗: 無 Token', 'error');
+      addLog('訂閱失敗: 無 Token (請等待 Auth 成功)', 'error');
     }
   }, [sendPacket, addLog]);
 
-  // 回傳 logs 供外部顯示
   return { isConnected, marketData, subscribeStocks, logs };
 }
