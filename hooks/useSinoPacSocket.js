@@ -1,4 +1,3 @@
-// hooks/useSinoPacSocket.js
 import { useEffect, useRef, useState, useCallback } from 'react';
 
 const WSS_URL = 'wss://mitakerainbowuat.mtkstock.com.tw:8633/';
@@ -6,26 +5,41 @@ const WSS_URL = 'wss://mitakerainbowuat.mtkstock.com.tw:8633/';
 const getFormattedTime = () => {
   const now = new Date();
   const pad = (n) => n.toString().padStart(2, '0');
-  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  return `${now.getHours()}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`; // 簡化時間顯示
 };
 
-export function useSinoPacSocket(onAuthSuccess) { // [新增] 接收一個回調函式
+// 產生完整 YYYYMMDDHHMMSS 給封包用
+const getPacketTime = () => {
+    const now = new Date();
+    const pad = (n) => n.toString().padStart(2, '0');
+    return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+};
+
+export function useSinoPacSocket(onAuthSuccess) {
   const socketRef = useRef(null);
   const tokenRef = useRef(null);
   const heartbeatIntervalRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
   const snRef = useRef(1);
-  const requestHistoryRef = useRef(new Map());
 
+  // [新增] 除錯日誌 State
+  const [logs, setLogs] = useState([]);
   const [isConnected, setIsConnected] = useState(false);
   const [marketData, setMarketData] = useState({});
+
+  // [新增] 寫入日誌的輔助函式
+  const addLog = useCallback((msg, type = 'info') => {
+    const time = getFormattedTime();
+    setLogs(prev => [`[${time}] ${msg}`, ...prev].slice(0, 50)); // 只保留最近 50 筆
+    console.log(`[${time}] ${msg}`);
+  }, []);
 
   const sendPacket = useCallback((api, data = {}, extraFields = {}) => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       const currentSn = snRef.current;
       const payload = {
         api, apiver: "1.0", sn: currentSn, token: tokenRef.current, ...extraFields,
-        data: { time: getFormattedTime(), ...data }
+        data: { time: getPacketTime(), ...data }
       };
 
       if (api === 'auth') {
@@ -37,24 +51,33 @@ export function useSinoPacSocket(onAuthSuccess) { // [新增] 接收一個回調
         });
       }
 
-      if (api !== 'hb') requestHistoryRef.current.set(currentSn, { api, data, extraFields });
-
-      // console.log(`[Send ${api}]`, payload); // 減少 log
+      addLog(`發送 -> ${api} (SN:${currentSn})`, 'send');
       socketRef.current.send(JSON.stringify(payload));
       snRef.current += 1;
+    } else {
+      addLog(`發送失敗: Socket 未連線 (${api})`, 'error');
     }
-  }, []);
+  }, [addLog]);
 
   const connect = useCallback(() => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) return;
+    if (socketRef.current?.readyState === WebSocket.OPEN || socketRef.current?.readyState === WebSocket.CONNECTING) return;
 
-    socketRef.current = new WebSocket(WSS_URL);
+    addLog(`正在連線至 ${WSS_URL}...`, 'info');
+
+    try {
+        socketRef.current = new WebSocket(WSS_URL);
+    } catch (e) {
+        addLog(`WebSocket 建構失敗: ${e.message}`, 'error');
+        return;
+    }
 
     socketRef.current.onopen = () => {
-      console.log('✅ WebSocket Connected');
+      addLog('✅ WebSocket 連線成功 (Connected)', 'success');
+      setIsConnected(true);
       snRef.current = 1;
-      requestHistoryRef.current.clear();
-      // 連線後馬上 Auth
+
+      // 連線後馬上發送 Auth
+      addLog('準備發送 Auth...', 'info');
       sendPacket('auth', { auth_key: "", US: "r", HK: "d" });
     };
 
@@ -63,71 +86,82 @@ export function useSinoPacSocket(onAuthSuccess) { // [新增] 接收一個回調
         const response = JSON.parse(event.data);
         const { api, sn, data } = response;
 
-        // 408 重試邏輯
-        if (data?.rc === '408') {
-            const original = requestHistoryRef.current.get(sn);
-            if (original) setTimeout(() => sendPacket(original.api, original.data, original.extraFields), 1000);
-            return;
-        }
-        if (data?.rc === '000' && sn) requestHistoryRef.current.delete(sn);
-
-        // Auth 成功
-        if (api === 'auth' && data?.rc === '000') {
-          tokenRef.current = data.token;
-          setIsConnected(true);
-          console.log('🔑 Auth Success');
-
-          // 啟動心跳
-          if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
-          heartbeatIntervalRef.current = setInterval(() => sendPacket('hb'), 10000);
-
-          // [關鍵] 通知外部組件：連線好了，可以訂閱了！
-          if (onAuthSuccess) onAuthSuccess();
+        // 只記錄非心跳的 Log，避免洗版
+        if (api !== 'hb') {
+            addLog(`收到 <- ${api} (RC:${data?.rc})`, data?.rc === '000' ? 'success' : 'error');
         }
 
-        // 處理報價與走勢
-        if (api === 'quote' || api === 'sync' || api === 'tick') {
+        if (api === 'auth') {
+             if (data?.rc === '000') {
+                tokenRef.current = data.token;
+                addLog(`🔑 Auth 成功! Token 取得`, 'success');
+
+                // 啟動心跳
+                if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
+                heartbeatIntervalRef.current = setInterval(() => sendPacket('hb'), 10000);
+
+                if (onAuthSuccess) onAuthSuccess();
+             } else {
+                addLog(`❌ Auth 失敗: RC=${data?.rc}`, 'error');
+             }
+        }
+
+        if (api === 'quote' || api === 'sync') {
           const items = data.trendItems || [data];
-          if (items) {
-            setMarketData(prev => {
-              const newData = { ...prev };
-              items.forEach(item => {
-                if (item.code) {
-                  // 簡單合併邏輯
-                  newData[item.code] = { ...newData[item.code], ...item };
-                }
-              });
-              return newData;
-            });
+          if (items && items.length > 0) {
+             setMarketData(prev => {
+                const newData = { ...prev };
+                items.forEach(item => {
+                    if (item.code) newData[item.code] = { ...newData[item.code], ...item };
+                });
+                return newData;
+             });
           }
         }
-      } catch (e) { console.error(e); }
+
+      } catch (e) {
+        addLog(`解析錯誤: ${e.message}`, 'error');
+      }
     };
 
-    socketRef.current.onclose = () => {
-      console.log('❌ Disconnected, retrying in 3s...');
+    socketRef.current.onclose = (event) => {
       setIsConnected(false);
       tokenRef.current = null;
+      // 顯示斷線原因代碼 (重要！)
+      addLog(`❌ 連線中斷 (Code: ${event.code}, Reason: ${event.reason || '無'})`, 'error');
+
       if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
-      reconnectTimeoutRef.current = setTimeout(connect, 3000);
+
+      addLog('🔄 3秒後嘗試重連...', 'warning');
+      reconnectTimeoutRef.current = setTimeout(() => {
+        connect();
+      }, 3000);
     };
 
-  }, [sendPacket, onAuthSuccess]);
+    socketRef.current.onerror = (err) => {
+      // 瀏覽器基於安全原因，onerror 通常不給詳細資訊，只能知道有錯
+      addLog('⚠️ WebSocket 發生錯誤 (請檢查瀏覽器 Console Network 標籤)', 'error');
+    };
+
+  }, [sendPacket, addLog, onAuthSuccess]);
 
   useEffect(() => {
     connect();
     return () => {
-      socketRef.current?.close();
+      if (socketRef.current) socketRef.current.close();
+      if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
     };
   }, [connect]);
 
   const subscribeStocks = useCallback((codes) => {
     if (tokenRef.current) {
-      // 使用疊加模式 (reset: "n") 避免覆蓋
       sendPacket('push', { qtype: "US", reset: "n", codes });
+    } else {
+      addLog('訂閱失敗: 無 Token', 'error');
     }
-  }, [sendPacket]);
+  }, [sendPacket, addLog]);
 
-  return { isConnected, marketData, subscribeStocks };
+  // 回傳 logs 供外部顯示
+  return { isConnected, marketData, subscribeStocks, logs };
 }
